@@ -2996,7 +2996,7 @@ function om(type,data){
     </div>
     <div class="mf">
       <button class="btn bg" onclick="cm()">Cancelar</button>
-      <button class="btn bp" onclick="savePac(${JSON.stringify(nome||'')})">💾 Salvar Paciente</button>
+      <button class="btn bp" onclick="savePac(this)" data-n="${esc(nome||'')}">💾 Salvar Paciente</button>
     </div>`;
   }
 
@@ -3302,7 +3302,9 @@ function togglePlano(){
   if(fg)fg.style.display=v==='plano'?'flex':'none';
 }
 
-function savePac(oldNome){
+function savePac(btn){
+  // btn can be HTMLElement (from onclick="savePac(this)") or legacy string
+  const oldNome = (btn && typeof btn === 'object') ? (btn.dataset.n||'') : (btn||'');
   const nome=gv('f_nome').trim().toUpperCase();
   if(!nome){toast('⚠️ Informe o nome do paciente','var(--yel)');return;}
   const tipoPag=gv('f_tipoPag');
@@ -3322,13 +3324,14 @@ function savePac(oldNome){
     nomePlano:tipoPag==='plano'?gv('f_nomePlano'):'',
     valMensal:gv('f_valMensal')?parseFloat(gv('f_valMensal')):null,
   };
-  const idx=DB.pacs.findIndex(p=>p.nome===(oldNome||nome));
-  if(idx>=0)DB.pacs[idx]=data;else DB.pacs.push(data);
+  const searchName = oldNome||nome;
+  const idx = searchName ? DB.pacs.findIndex(p=>p.nome===searchName) : -1;
+  if(idx>=0){DB.pacs[idx]=data;}else{DB.pacs.push(data);}
   svDB();cm();rPacs();
   // refresh prontuário if open on this patient
   const ps=document.getElementById('prontSel');
-  if(ps&&ps.value===oldNome)selPront(nome);
-  toast('✅ Paciente salvo!');
+  if(ps&&(ps.value===oldNome||ps.value===nome))selPront(nome);
+  toast('Paciente salvo com sucesso!');
 }
 
 function saveEvol(){
