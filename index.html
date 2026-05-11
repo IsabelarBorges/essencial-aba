@@ -1356,11 +1356,22 @@ async function syncToSupabase(){
       {user_id:user.id,data:DB,updated_at:new Date().toISOString()},
       {onConflict:'user_id'}
     );
-    if(error)throw error;
+    if(error){
+      // Tabela não existe?
+      if(error.code==='42P01'||error.message?.includes('app_data')){
+        updateSyncIndicator('error');
+        console.error('[Supabase] Tabela app_data não encontrada! Execute o SQL de criação no Supabase.');
+        // Dados ficam salvos no localStorage mesmo assim
+        return;
+      }
+      throw error;
+    }
     updateSyncIndicator('ok');
   }catch(e){
-    console.warn('Sync error:',e);
+    console.warn('[Sync error]',e?.message||e);
     updateSyncIndicator('error');
+    // IMPORTANTE: dados já foram salvos no localStorage em svDB()
+    // Supabase sync é adicional - falha silenciosa não perde dados
   }
 }
 
@@ -2214,6 +2225,7 @@ function rPacs(filt='',diaF=''){
       <div class="pact">
         <button class="btn bg bic" style="font-size:10px" title="Editar" onclick="omPac(${i})">✏️</button>
         <button class="btn bg bic" style="font-size:10px" title="Ver histórico" onclick="openPacModal(${i})">👁</button>
+        <button class="btn bic" style="font-size:10px;background:var(--redl);color:var(--red);border:1px solid var(--redl)" title="Excluir paciente" onclick="deletePac(window._PAC_LIST[${i}].nome)">🗑</button>
       </div>
     </div>`;
   }).join('');
@@ -2994,9 +3006,14 @@ function om(type,data){
       <div class="fg"><label>Histórico / Anamnese resumida</label>
         <textarea id="f_obs" style="min-height:80px" placeholder="Histórico clínico, medicações, alergias, particularidades, objetivos terapêuticos...">${esc(mp?.obs||'')}</textarea></div>
     </div>
-    <div class="mf">
-      <button class="btn bg" onclick="cm()">Cancelar</button>
-      <button class="btn bp" onclick="savePac(this)" data-n="${esc(nome||'')}">💾 Salvar Paciente</button>
+    <div class="mf" style="justify-content:space-between">
+      <div>
+        ${nome ? `<button class="btn" style="background:var(--redl);color:var(--red);border:1px solid var(--red)" onclick="deletePac('${esc(nome)}')">🗑 Excluir</button>` : ''}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn bg" onclick="cm()">Cancelar</button>
+        <button class="btn bp" onclick="savePac(this)" data-n="${esc(nome||'')}">💾 Salvar</button>
+      </div>
     </div>`;
   }
 
@@ -3296,6 +3313,26 @@ function saveSessao(editDay,editIdx){
   svDB();cm();rCal();rDash();toast('✅ Sessão salva com sucesso!');
 }
 
+
+function deletePac(nome){
+  if(!nome){toast('Paciente não identificado','var(--red)');return;}
+  if(!confirm('Excluir o paciente "'+nome+'" permanentemente?\n\nEsta ação não pode ser desfeita.')){return;}
+  // Remove de DB.pacs
+  DB.pacs = DB.pacs.filter(function(p){return p.nome!==nome;});
+  // Remove evoluções
+  DB.evols = DB.evols.filter(function(e){return e.pac!==nome;});
+  // Remove das presenças
+  Object.keys(DB.pres).forEach(function(dia){
+    Object.keys(DB.pres[dia]).forEach(function(k){
+      if(k.startsWith(nome+'__'))delete DB.pres[dia][k];
+    });
+  });
+  svDB();
+  cm(); // fecha modal
+  rPacs(); // atualiza lista
+  toast('🗑 Paciente excluído.');
+}
+
 function togglePlano(){
   const v=gv('f_tipoPag');
   const fg=document.getElementById('fg_nomePlano');
@@ -3303,35 +3340,68 @@ function togglePlano(){
 }
 
 function savePac(btn){
-  // btn can be HTMLElement (from onclick="savePac(this)") or legacy string
-  const oldNome = (btn && typeof btn === 'object') ? (btn.dataset.n||'') : (btn||'');
-  const nome=gv('f_nome').trim().toUpperCase();
-  if(!nome){toast('⚠️ Informe o nome do paciente','var(--yel)');return;}
-  const tipoPag=gv('f_tipoPag');
-  const data={
-    nome,
-    diag:gv('f_diag'),
-    terapeuta:gv('f_ter2'),
-    responsavel:gv('f_resp'),
-    whatsapp:gv('f_wp'),
-    nasc:gv('f_nasc'),
-    email:gv('f_email'),
-    plano:gv('f_plano'),
-    parentesco:gv('f_par'),
-    status:gv('f_status'),
-    obs:gv('f_obs'),
-    tipoPag,
-    nomePlano:tipoPag==='plano'?gv('f_nomePlano'):'',
-    valMensal:gv('f_valMensal')?parseFloat(gv('f_valMensal')):null,
-  };
-  const searchName = oldNome||nome;
-  const idx = searchName ? DB.pacs.findIndex(p=>p.nome===searchName) : -1;
-  if(idx>=0){DB.pacs[idx]=data;}else{DB.pacs.push(data);}
-  svDB();cm();rPacs();
-  // refresh prontuário if open on this patient
-  const ps=document.getElementById('prontSel');
-  if(ps&&(ps.value===oldNome||ps.value===nome))selPront(nome);
-  toast('Paciente salvo com sucesso!');
+  try{
+    // Pega o oldNome do data-n do botão (para edição)
+    var oldNome='';
+    if(btn && typeof btn==='object' && btn.dataset){
+      oldNome=btn.dataset.n||'';
+    } else if(typeof btn==='string'){
+      oldNome=btn||'';
+    }
+
+    // Lê o nome do campo do formulário
+    var nomeEl=document.getElementById('f_nome');
+    if(!nomeEl){toast('Erro: formulário não encontrado. Feche e abra novamente.','var(--red)');return;}
+    var nome=(nomeEl.value||'').trim().toUpperCase();
+    if(!nome){toast('⚠️ Informe o nome do paciente','var(--yel)');return;}
+
+    var tipoPag=gv('f_tipoPag');
+    var data={
+      nome:nome,
+      diag:gv('f_diag'),
+      terapeuta:gv('f_ter2'),
+      responsavel:gv('f_resp'),
+      whatsapp:gv('f_wp'),
+      nasc:gv('f_nasc'),
+      email:gv('f_email'),
+      plano:gv('f_plano'),
+      parentesco:gv('f_par'),
+      status:gv('f_status')||'ativo',
+      obs:gv('f_obs'),
+      tipoPag:tipoPag,
+      nomePlano:tipoPag==='plano'?gv('f_nomePlano'):'',
+      valMensal:gv('f_valMensal')?parseFloat(gv('f_valMensal')):null,
+    };
+
+    // Garante que DB.pacs existe
+    if(!Array.isArray(DB.pacs)) DB.pacs=[];
+
+    var searchName=oldNome||nome;
+    var idx=DB.pacs.findIndex(function(p){return p.nome===searchName;});
+    if(idx>=0){
+      DB.pacs[idx]=data;
+    } else {
+      DB.pacs.push(data);
+    }
+
+    // Salva local + Supabase
+    svDB();
+
+    // Fecha modal e atualiza lista
+    cm();
+    rPacs();
+
+    // Atualiza prontuário se estiver aberto
+    var ps=document.getElementById('prontSel');
+    if(ps&&(ps.value===oldNome||ps.value===nome))selPront(nome);
+
+    toast('✅ Paciente salvo com sucesso!');
+    console.log('[savePac] Salvo:', nome, '| Total pacientes:', DB.pacs.length);
+
+  }catch(err){
+    console.error('[savePac] Erro:', err);
+    toast('Erro ao salvar: '+err.message,'var(--red)');
+  }
 }
 
 function saveEvol(){
