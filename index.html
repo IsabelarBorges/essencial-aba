@@ -764,7 +764,7 @@ input:focus,select:focus,textarea:focus{
         <button class="btn bg" onclick="calHoje()">Hoje</button>
         <button class="btn bg" onclick="calNav(1)">Próximo ▶</button>
         <button class="btn bp" onclick="om('sessaoAvulsa')">+ Sessão</button>
-        <button class="btn bg" style="color:var(--red)" onclick="limparMesesFuturos()" title="Apaga sessões avulsas a partir de maio/2025">🗑 Limpar futuros</button>
+
       </div>
     </div>
 
@@ -822,6 +822,7 @@ input:focus,select:focus,textarea:focus{
       <div class="dtab act" onclick="relTab('freq',this)">📊 Frequência</div>
       <div class="dtab" onclick="relTab('faltas',this)">❌ Faltas por paciente</div>
       <div class="dtab" onclick="relTab('terapeuta',this)">👩‍⚕️ Por terapeuta</div>
+      <div class="dtab" onclick="relTab('pacientes-rel',this)">👥 Pacientes</div>
       <div class="dtab" onclick="relTab('exportar',this)">📤 Exportar</div>
     </div>
     <!-- Frequência -->
@@ -845,6 +846,29 @@ input:focus,select:focus,textarea:focus{
     <div id="rel-terapeuta" style="display:none">
       <div class="g g2" id="rel-ter-cards"></div>
     </div>
+    <!-- Pacientes cadastrados -->
+    <div id="rel-pacientes-rel" style="display:none">
+      <div class="g g4" style="margin-bottom:14px" id="rel-pac-stats"></div>
+      <div class="card">
+        <div class="ctit">👥 Pacientes cadastrados</div>
+        <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <select id="rel-pac-status" onchange="rRelPacs()" style="max-width:150px">
+            <option value="">Todos os status</option>
+            <option value="ativo">Ativos</option>
+            <option value="inativo">Inativos</option>
+            <option value="espera">Em espera</option>
+          </select>
+          <select id="rel-pac-ter" onchange="rRelPacs()" style="max-width:160px">
+            <option value="">Todos terapeutas</option>
+          </select>
+        </div>
+        <table>
+          <thead><tr><th>Paciente</th><th>Terapeuta</th><th>Dias</th><th>Responsável</th><th>Contato</th><th>Pagamento</th><th>Docs</th><th>Status</th><th>Ação</th></tr></thead>
+          <tbody id="rel-pac-table"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Exportar -->
     <div id="rel-exportar" style="display:none">
       <div class="g g2">
@@ -1435,6 +1459,9 @@ function toggleDark(){
 // INIT APP (chamado após login)
 // ═══════════════════════════════════════════════════════════════
 function initApp(){
+  // Limpeza de duplicatas ao iniciar
+  (function(){var _s={};DB.pacs=(DB.pacs||[]).filter(function(p){if(!p.nome||_s[p.nome])return false;_s[p.nome]=true;return true;});})();
+
   // Set semana default tab to current day
   const dow=new Date().getDay();
   const diaKey={1:'seg',2:'ter',3:'qua',4:'qui',5:'sex'}[dow]||'seg';
@@ -1698,8 +1725,8 @@ function sessoesDoDia(dt){
   const filtTer = (document.getElementById('calFiltTer')||{}).value||'';
   const lista = [];
 
-  // ── DATA DE CORTE: sessões recorrentes do SEED só até 30/04/2025 ──
-  const CORTE = '2025-05-01';
+  // ── Sessões semanais fixas disponíveis até fim de 2026 ──
+  const CORTE = '2027-01-01';
   const usaSeed = ds < CORTE;
 
   // 1 — Sessões semanais fixas (apenas antes do corte)
@@ -2347,6 +2374,85 @@ function relTab(tab, btn){
   });
 }
 
+
+function rRelPacs(){
+  const status=(document.getElementById('rel-pac-status')||{}).value||'';
+  const terFilt=(document.getElementById('rel-pac-ter')||{}).value||'';
+
+  // Popula filtro terapeuta
+  const terSel=document.getElementById('rel-pac-ter');
+  if(terSel&&terSel.options.length<=1){
+    const cods=[...new Set(DAYS.flatMap(d=>(DB.sched[d]||[]).map(r=>r[3].split('/')[0])))].filter(Boolean).sort();
+    cods.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;terSel.appendChild(o);});
+  }
+
+  const idx=buildPacIdx();
+  let list=idx.filter(function(p){
+    const mp=DB.pacs.find(function(x){return x.nome===p.nome;});
+    if(status&&(mp?.status||'ativo')!==status)return false;
+    if(terFilt&&!p.dias.some(function(d){return (DB.sched[d]||[]).some(function(r){return r[2]===p.nome&&r[3].split('/').includes(terFilt);});}))return false;
+    return true;
+  });
+
+  const ativos=idx.filter(function(p){const mp=DB.pacs.find(function(x){return x.nome===p.nome;});return (mp?.status||'ativo')==='ativo';}).length;
+  const inativos=idx.filter(function(p){const mp=DB.pacs.find(function(x){return x.nome===p.nome;});return mp?.status==='inativo';}).length;
+  const espera=idx.filter(function(p){const mp=DB.pacs.find(function(x){return x.nome===p.nome;});return mp?.status==='espera';}).length;
+
+  document.getElementById('rel-pac-stats').innerHTML=
+    '<div class="sc"><div class="sl">Total geral</div><div class="sv">'+idx.length+'</div></div>'
+    +'<div class="sc b"><div class="sl">Ativos</div><div class="sv">'+ativos+'</div></div>'
+    +'<div class="sc r"><div class="sl">Inativos</div><div class="sv">'+inativos+'</div></div>'
+    +'<div class="sc y"><div class="sl">Em espera</div><div class="sv">'+espera+'</div></div>';
+
+  document.getElementById('rel-pac-table').innerHTML=list.map(function(p){
+    const mp=DB.pacs.find(function(x){return x.nome===p.nome;})||{};
+    const status=mp.status||'ativo';
+    const badge=status==='ativo'?'<span class="bge bg-g">Ativo</span>'
+      :status==='inativo'?'<span class="bge bg-r">Inativo</span>'
+      :'<span class="bge bg-y">Espera</span>';
+    const dias=p.dias.map(function(d){return DN[d];}).join(', ')||'—';
+    const teres=[...new Set(p.dias.flatMap(function(d){
+      return (DB.sched[d]||[]).filter(function(r){return r[2]===p.nome;}).map(function(r){return r[3];});
+    }))].join(', ')||mp.terapeuta||'—';
+    const pag=mp.tipoPag==='plano'?'Plano: '+(mp.nomePlano||'?')
+      :mp.tipoPag==='particular'?'Particular':'—';
+    var pacDocs=(DB.docs||[]).filter(function(d){return d.pac===p.nome;});
+    var docsQtd=pacDocs.length;
+    var tr=document.createElement('tr');
+    tr.innerHTML=
+      '<td><strong>'+esc(p.nome)+'</strong></td>'
+      +'<td>'+esc(teres)+'</td>'
+      +'<td>'+esc(dias)+'</td>'
+      +'<td>'+esc(mp.responsavel||'-')+'</td>'
+      +'<td>'+esc(mp.whatsapp||mp.email||'-')+'</td>'
+      +'<td>'+esc(pag)+'</td>'
+      +'<td class="rdc"></td>'
+      +'<td>'+badge+'</td>'
+      +'<td class="rec"></td>';
+    var docCell=tr.querySelector('.rdc');
+    if(docsQtd>0){
+      var ds=document.createElement('span');
+      ds.style.cssText='color:var(--acc);font-weight:600;cursor:pointer';
+      ds.textContent=docsQtd+' doc(s)';
+      ds.addEventListener('click',function(){go('documentos');});
+      docCell.appendChild(ds);
+    } else {
+      var db=document.createElement('button');
+      db.className='btn bg';db.style.cssText='font-size:10px;padding:2px 8px';
+      db.textContent='+ Anexar';
+      db.addEventListener('click',(function(pNome){return function(){om('doc',pNome);};})(p.nome));
+      docCell.appendChild(db);
+    }
+    var editCell=tr.querySelector('.rec');
+    var eb=document.createElement('button');
+    eb.className='btn bg';eb.style.cssText='font-size:10px;padding:2px 8px';
+    eb.textContent='Editar';
+    eb.addEventListener('click',(function(pNome){return function(){om('pac',pNome);};})(p.nome));
+    editCell.appendChild(eb);
+    return tr.outerHTML;
+  }).join('')||'<tr><td colspan="7" class="tm" style="padding:14px;font-size:12px">Nenhum paciente encontrado.</td></tr>';
+}
+
 function rRelatorio(){
   const hoje=new Date();
   const ano=hoje.getFullYear(),mes=hoje.getMonth();
@@ -2354,7 +2460,8 @@ function rRelatorio(){
   // Popula select de meses
   const sel=document.getElementById('relMes');
   if(sel&&sel.options.length<=1){
-    for(let i=0;i<6;i++){
+    // 1 mês futuro + mês atual + 11 meses passados = 13 opções
+    for(let i=-1;i<12;i++){
       const d=new Date(ano,mes-i,1);
       const opt=document.createElement('option');
       opt.value=`${d.getFullYear()}-${d.getMonth()}`;
@@ -3210,8 +3317,10 @@ function om(type,data){
   // ── DOCUMENTO ──
   else if(type==='doc'){
     const d=typeof data==='number'?DB.docs.find(x=>x.id===data):null;
+    const prePac=typeof data==='string'?data:'';
     h=`<div class="mh"><h2>${d?'Editar Documento':'Novo Documento'}</h2></div>
     <div class="mbd">
+      <div class="fg"><label>Paciente vinculado</label><select id="f_dpac" style="max-width:100%"><option value="">Nenhum</option></select></div>
       <div class="fg"><label>Nome do documento *</label><input id="f_dnom" value="${esc(d?.nome||'')}" placeholder="Ex: Contrato — Ana Luiza M."></div>
       <div class="fr fr2">
         <div class="fg"><label>Tipo</label>
@@ -3294,6 +3403,7 @@ function om(type,data){
   }
 
   document.getElementById('mc').innerHTML=h;
+  if(type==='doc'){_populateDocPacSel();if(typeof prePac!=='undefined'&&prePac&&document.getElementById('f_dpac'))document.getElementById('f_dpac').value=prePac;}
   document.getElementById('mb').className='mb'+(type==='pac'||type==='terapeuta'?' wide':'');
   document.getElementById('mo').classList.add('open');
 }
@@ -3355,6 +3465,26 @@ function savePac(btn){
     var nome=(nomeEl.value||'').trim().toUpperCase();
     if(!nome){toast('⚠️ Informe o nome do paciente','var(--yel)');return;}
 
+    // ── PROTEÇÃO CONTRA DUPLICIDADE ─────────────────────────────
+    var isNovo = !oldNome; // sem oldNome = cadastro novo
+    if(isNovo){
+      // Verifica se nome já existe em DB.pacs
+      var jaExistePacs = DB.pacs.some(function(p){return p.nome===nome;});
+      // Verifica se nome já está na grade semanal (SEED)
+      var jaExisteSched = DAYS.some(function(d){
+        return (DB.sched[d]||[]).some(function(r){return r[2]===nome;});
+      });
+      if(jaExistePacs || jaExisteSched){
+        if(!confirm('Já existe um paciente com o nome "'+nome+'" no sistema.\n\nDeseja abrir o cadastro existente para editar?')){
+          return; // usuário cancelou
+        }
+        // Abre o paciente existente para edição em vez de criar duplicata
+        cm();
+        setTimeout(function(){om('pac', nome);}, 150);
+        return;
+      }
+    }
+
     var tipoPag=gv('f_tipoPag');
     var data={
       nome:nome,
@@ -3376,12 +3506,38 @@ function savePac(btn){
     // Garante que DB.pacs existe
     if(!Array.isArray(DB.pacs)) DB.pacs=[];
 
-    var searchName=oldNome||nome;
-    var idx=DB.pacs.findIndex(function(p){return p.nome===searchName;});
-    if(idx>=0){
-      DB.pacs[idx]=data;
+    // Procura por oldNome (edição) OU pelo próprio nome
+    var idxByOld = oldNome ? DB.pacs.findIndex(function(p){return p.nome===oldNome;}) : -1;
+    var idxByNome = DB.pacs.findIndex(function(p){return p.nome===nome;});
+    var idx = idxByOld >= 0 ? idxByOld : idxByNome;
+    if(idx >= 0){
+      DB.pacs[idx] = data; // atualiza existente — sem duplicata
     } else {
-      DB.pacs.push(data);
+      DB.pacs.push(data);  // novo paciente
+    }
+    // ── Limpeza de duplicatas (segurança extra) ──
+    var seen = {};
+    DB.pacs = DB.pacs.filter(function(p){
+      if(seen[p.nome]) return false;
+      seen[p.nome] = true;
+      return true;
+    });
+    // ── Atualiza referências na grade se nome mudou ──
+    if(oldNome && oldNome !== nome){
+      DAYS.forEach(function(d){
+        (DB.sched[d]||[]).forEach(function(r){ if(r[2]===oldNome) r[2]=nome; });
+      });
+      // Atualiza presenças
+      Object.keys(DB.pres).forEach(function(dia){
+        var presDay = DB.pres[dia];
+        Object.keys(presDay).forEach(function(k){
+          if(k.startsWith(oldNome+'__')){
+            var newKey = nome+'__'+k.slice(oldNome.length+2);
+            presDay[newKey] = presDay[k];
+            delete presDay[k];
+          }
+        });
+      });
     }
 
     // Salva local + Supabase
@@ -3441,10 +3597,21 @@ function saveMens(id){
   svDB();cm();rMens();toast('✅ Mensalidade salva!');
 }
 
+
+function _populateDocPacSel(){
+  var sel=document.getElementById('f_dpac');
+  if(!sel)return;
+  var cur=sel.value;
+  var pacs=buildPacIdx().map(function(p){return p.nome;}).sort();
+  sel.innerHTML='<option value="">Nenhum</option>'+pacs.map(function(n){
+    return '<option value="'+esc(n)+'"'+(n===cur?' selected':'')+'>'+esc(n)+'</option>';
+  }).join('');
+  if(cur)sel.value=cur;
+}
 function saveDoc(id){
   const nome=gv('f_dnom').trim();
   if(!nome){toast('⚠️ Informe o nome do documento','var(--yel)');return;}
-  const item={nome,tipo:gv('f_dtipo'),data:gv('f_ddata'),st:gv('f_dst')};
+  const item={nome,pac:gv('f_dpac')||'',tipo:gv('f_dtipo'),data:gv('f_ddata'),st:gv('f_dst')};
   if(id){const i=DB.docs.findIndex(d=>d.id===id);if(i>=0)DB.docs[i]={...DB.docs[i],...item};}
   else DB.docs.push({id:Date.now(),...item});
   svDB();cm();rDocs();toast('✅ Documento salvo!');
